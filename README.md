@@ -2,6 +2,8 @@
 
 GPU shader decompiler and inspector with integrated 3D preview. Converts compiled shader bytecode into readable HLSL or Metal source code.
 
+![ShaderExplorer](docs/ShaderExplorer_00.png)
+
 ## Supported Formats
 
 | Format | Extensions | Description |
