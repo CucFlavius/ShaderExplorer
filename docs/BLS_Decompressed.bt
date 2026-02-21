@@ -1,0 +1,204 @@
+//------------------------------------------------
+// File:     BLS_Decompressed.bt
+// Author:   Companion to BLS.bt
+// Rev:      1.2
+// Purpose:  Parse decompressed BLS permutation stream
+// Category: Game
+//------------------------------------------------
+//
+// Parses a flat decompressed BLS permutation stream.
+// Scans for valid blob headers and creates PermBlob
+// struct entries in the tree.
+//
+// Blob header formats (determined by flags at +0):
+//   flags & 3 == 0: 16-byte header, code at +16
+//   flags & 1, !(flags & 2): 36-byte header, code at +36
+//   flags & 3: extended header, code offset at +8
+//
+// Two ways to use:
+//   A) Automatic (recommended):
+//      Open a .bls file, run BLS_Decompress.1sc.
+//      The script decompresses via zlib1.dll, creates
+//      a new tab, and runs this template automatically.
+//
+//   B) Manual (Python):
+//      python bls_decompress.py shader.bls --export
+//      Open shader.decompressed.bin in 010 Editor
+//      Run this template manually.
+//------------------------------------------------
+
+RequiresVersion(9, 0);
+LittleEndian();
+
+//------------------------------------------------
+// Struct Definitions
+//------------------------------------------------
+
+typedef struct {
+    uint32 version          <comment="Must be 3 for DX (pmDxShaderCode::Version)">;
+    uint32 field1           <comment="Unknown (not read by engine)">;
+    uint64 cbvBindMask      <format=hex, comment="CBV register bitmask (b# slots)">;
+    uint64 srvBindMask_lo   <format=hex, comment="SRV bitmask low (t# 0-63)">;
+    uint64 srvBindMask_hi   <format=hex, comment="SRV bitmask high (t# 64-127)">;
+    uint64 uavBindMask      <format=hex, comment="UAV bitmask (u# slots)">;
+    uint64 samplerBindMask  <format=hex, comment="Sampler bitmask (s# slots)">;
+    uint32 bytecodeSize     <comment="DXBC/DXIL bytecode size in bytes">;
+    uint32 bytecodeRelOffset <comment="Bytecode at (&this_field + value), typically 4">;
+} pmDxShaderCode <bgcolor=cLtAqua>;  // 56 bytes
+
+typedef struct {
+    uint32 shaderFlags      <format=hex, comment="Shader compilation flags (DX12 PSO)">;
+    uint32 bindField1       <comment="Binding info field 1">;
+    uint64 bindField2       <format=hex, comment="Binding info field 2">;
+    uint64 bindField3       <format=hex, comment="Binding info field 3">;
+} BlobBindingInfo <bgcolor=cLtYellow>;  // 24 bytes
+
+typedef struct {
+    local uint64 blobStart_ = FTell();
+    local uint32 bcMagic_ = 0;
+    local uint32 bcSize_ = 0;
+    local uint32 codeOff_ = 0;
+    local uint32 flags_ = 0;
+    local uint32 shaderFlags_ = 0;
+
+    // Blob header (first 16 bytes always present)
+    uint32 flags               <format=hex, comment="Bit0=hasBindInfo, Bit1=codeOffsetAt+8">;
+    uint32 codeSize            <format=hex, comment="Size of code region (pmDxShaderCode + bytecode)">;
+    flags_ = flags;
+
+    if ((flags & 2) != 0) {
+        uint32 codeOffset      <format=hex, comment="Offset from blob start to pmDxShaderCode">;
+        codeOff_ = codeOffset;
+    } else {
+        uint32 shaderFlags     <format=hex, comment="Shader compilation flags (DX12 PSO)">;
+        shaderFlags_ = shaderFlags;
+        if ((flags & 1) != 0)
+            codeOff_ = 36;
+        else
+            codeOff_ = 16;
+    }
+
+    uint32 field3              <comment="Always 0">;
+
+    if (codeSize != 0) {
+        // Extended binding info between header and pmDxShaderCode
+        if ((flags & 1) != 0) {
+            if ((flags & 2) != 0) {
+                // New format: 24-byte binding info at +16
+                BlobBindingInfo bindInfo;
+                shaderFlags_ = bindInfo.shaderFlags;
+            } else {
+                // Old extended format: 20 bytes of binding data at +16
+                uchar bindingData[20] <bgcolor=cLtYellow, comment="Inline binding info (old format)">;
+            }
+        }
+
+        // pmDxShaderCode at computed offset
+        pmDxShaderCode code;
+        bcSize_ = code.bytecodeSize;
+
+        // Bytecode after relOffset displacement
+        if (code.bytecodeSize > 0 && code.bytecodeRelOffset >= 4) {
+            local int blobCodeGap_ = code.bytecodeRelOffset - 4;
+            if (blobCodeGap_ > 0)
+                uchar codeGap[blobCodeGap_] <bgcolor=cGray, comment="Gap before bytecode">;
+
+            if (code.bytecodeSize >= 4)
+                bcMagic_ = ReadUInt(FTell());
+            uchar bytecode[code.bytecodeSize] <comment="DXBC/DXIL shader bytecode">;
+        }
+    }
+} PermBlob <read=ReadPermBlob, optimize=false, bgcolor=cLtGreen>;
+
+string ReadPermBlob(PermBlob &b) {
+    string s;
+    if (b.codeSize == 0) {
+        s = "empty";
+    } else {
+        local string bcType = "";
+        if (b.bcMagic_ == 0x43425844) bcType = "DXBC";
+        else if (b.bcMagic_ != 0)
+            SPrintf(bcType, "0x%08X", b.bcMagic_);
+        SPrintf(s, "%s flags=0x%X bc=%u bytes (hdr=%u)",
+            bcType, b.shaderFlags_, b.bcSize_, b.codeOff_);
+    }
+    return s;
+}
+
+//------------------------------------------------
+// Scanning
+//
+// Determines code offset from flags, then validates
+// pmDxShaderCode.version == 3 at that offset.
+//------------------------------------------------
+
+Printf("=== BLS Decompressed Stream (%Lu bytes) ===\n", FileSize());
+
+local uint64 pos = 0;
+local uint64 fileEnd = FileSize();
+local uint32 blobCount = 0;
+local uint32 testFlags;
+local uint32 testCodeSz;
+local uint32 testCodeOff;
+local uint32 testCodeVer;
+local uint32 testBcSz;
+local uint32 testBcRel;
+local uint64 expectedEnd;
+
+while (pos + 16 <= fileEnd) {
+    testFlags  = ReadUInt(pos);
+    testCodeSz = ReadUInt(pos + 4);
+
+    if (testCodeSz == 0) {
+        pos += 4;
+        continue;
+    }
+
+    // Determine code offset from flags (matches engine logic)
+    if ((testFlags & 2) != 0) {
+        testCodeOff = ReadUInt(pos + 8);
+    } else if ((testFlags & 1) != 0) {
+        testCodeOff = 36;
+    } else {
+        testCodeOff = 16;
+    }
+
+    // Validate code offset is reasonable
+    if (testCodeOff < 16 || testCodeOff > 256) {
+        pos += 4;
+        continue;
+    }
+
+    // Check pmDxShaderCode.version at computed offset
+    if (pos + testCodeOff + 56 > fileEnd) {
+        pos += 4;
+        continue;
+    }
+
+    testCodeVer = ReadUInt(pos + testCodeOff);
+    if (testCodeVer != 3) {
+        pos += 4;
+        continue;
+    }
+
+    // Validate bytecode fields
+    testBcSz  = ReadUInt(pos + testCodeOff + 48);
+    testBcRel = ReadUInt(pos + testCodeOff + 52);
+    expectedEnd = testCodeOff + 52 + testBcRel + testBcSz;
+
+    if (testBcRel >= 4 && expectedEnd <= fileEnd - pos &&
+        expectedEnd < 0x200000) {
+        FSeek(pos);
+        PermBlob blob;
+        Printf("  Blob #%u at 0x%LX: codeOff=%u codeSize=0x%X bc=%u bytes\n",
+            blobCount, pos, testCodeOff, testCodeSz, testBcSz);
+        pos = FTell();
+        blobCount++;
+        continue;
+    }
+
+    pos += 4;
+}
+
+Printf("\nFound %u permutation blobs\n", blobCount);
+Printf("\n=== Done ===\n");

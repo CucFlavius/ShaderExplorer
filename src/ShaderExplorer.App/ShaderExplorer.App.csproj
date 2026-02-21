@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <UseWPF>true</UseWPF>
+        <AssemblyName>ShaderExplorer</AssemblyName>
+        <ApplicationIcon>..\..\assets\icon.ico</ApplicationIcon>
+        <StartupObject>ShaderExplorer.App.App</StartupObject>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40"/>
+        <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0"/>
+    </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\ShaderExplorer.Core\ShaderExplorer.Core.csproj"/>
+        <ProjectReference Include="..\ShaderExplorer.Decompiler\ShaderExplorer.Decompiler.csproj"/>
+        <ProjectReference Include="..\ShaderExplorer.Renderer\ShaderExplorer.Renderer.csproj"/>
+    </ItemGroup>
+    <ItemGroup>
+        <Content Include="Assets\Monaco\**\*" CopyToOutputDirectory="PreserveNewest" Link="Assets\Monaco\%(RecursiveDir)%(FileName)%(Extension)"/>
+        <Resource Include="..\..\assets\icon.ico" Link="icon.ico"/>
+        <Resource Include="..\..\assets\icon.png" Link="assets\icon.png"/>
+    </ItemGroup>
+</Project>
